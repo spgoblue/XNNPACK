@@ -63,9 +63,9 @@ void xnn_qs8_gemm_minmax_ukernel_2x8c8__neon_mull_padal(
     int32x4_t vacc1x6 = vacc0x6;
     int32x4_t vacc1x7 = vacc0x7;
 
-    // KC loop of 16 with up to 8 remainder
-    size_t k = 0;
-    while ((k + 8 * sizeof(int8_t)) < kc) {
+    size_t k = kc;
+    // 2x partial unrolled loop to load 16 bytes at a time.
+    while (k > 8 * sizeof(int8_t)) {
       const int8x8_t va0x0 = vld1_s8(a0); a0 += 8;
       const int8x8_t va0x1 = vld1_s8(a0); a0 += 8;
       const int8x8_t va1x0 = vld1_s8(a1); a1 += 8;
@@ -137,9 +137,13 @@ void xnn_qs8_gemm_minmax_ukernel_2x8c8__neon_mull_padal(
       vacc0x7 = vpadalq_s16(vacc0x7, vprod0x7);
       vacc1x7 = vpadalq_s16(vacc1x7, vprod1x7);
 
-      k += 16 * sizeof(int8_t);
+      k -= 16 * sizeof(int8_t);
     }
-    if (k < kc) {
+    // Handle up to 8 final positions of `k`
+    // If kc was 0 or 16, there is no remainder.  k is 0.
+    // If kc was 1 to 8,  there is a remainder of k.
+    // If kc was 9 to 15, the main loop handled the remainder; k underflowed.
+    if XNN_UNLIKELY(k > 1 && k <= 8) {
       const int8x8_t va0 = vld1_s8(a0); a0 += 8;
       const int8x8_t va1 = vld1_s8(a1); a1 += 8;
 
@@ -184,8 +188,13 @@ void xnn_qs8_gemm_minmax_ukernel_2x8c8__neon_mull_padal(
       vacc0x7 = vpadalq_s16(vacc0x7, vprod0x7);
       vacc1x7 = vpadalq_s16(vacc1x7, vprod1x7);
 
-      k += 8 * sizeof(int8_t);
+      k -= 8 * sizeof(int8_t);
     }
+    // End of accumulation loop. The variable `k` underflowed by the amount
+    // we advanced the `va` pointers beyond 'kc', so we rewind by this
+    // amount now.
+    a0 = (const int8_t*) ((uintptr_t) a0 - kc + k);
+    a1 = (const int8_t*) ((uintptr_t) a1 - kc + k);
 
 #if XNN_ARCH_ARM64
     const int32x4_t vsum0x01 = vpaddq_s32(vacc0x0, vacc0x1);
